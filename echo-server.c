@@ -41,6 +41,23 @@ main(int argc, char *argv[])
     (void) argc;
     (void) argv;
 
+    int server_fd = socket(PF_INET, SOCK_STREAM /* TCP */, 0);
+    if (server_fd < 0)
+        /* Catch error number for more detailed info */
+        die_errno(errno);
+
+    struct sockaddr_in server;
+    server.sin_family = PF_INET;
+    server.sin_addr.s_addr = INADDR_ANY;
+    server.sin_port = htons(8888);
+
+    if (bind(server_fd, (struct sockaddr *) &server, sizeof(server)))
+        die_errno(errno);
+
+    if (listen(server_fd, 0))
+        die_errno(server_fd);
+
+    sleep(30);
     return 0;
 }
 
