@@ -57,7 +57,52 @@ main(int argc, char *argv[])
     if (listen(server_fd, 0))
         die_errno(server_fd);
 
-    sleep(30);
+    for (;;) /* loop forever */
+    {
+        struct sockaddr_in client;
+        int client_fd;
+        socklen_t sl = sizeof(client); // sizeof(struct sockaddr_in)
+
+        client_fd = accept(server_fd, (struct sockaddr *) &client, &sl);
+        if (client_fd < 0)
+            die_errno(errno);
+
+        ssize_t size, sent_size;
+
+        char *client_ip = inet_ntoa(client.sin_addr); //network to addr
+
+        printf("Connection received from: %s\n", client_ip);
+
+        for (;;)
+        {
+            char buffer[128];
+            size = recv(client_fd, buffer, sizeof(buffer), 0);
+
+            if (size < 0)
+                die_errno(errno);
+
+            // Socket has been closed
+            if (size == 0)
+                break;
+
+            printf("Recv'd %ld bytes:\n<<<<<<\n", size);
+            write(1, buffer, size);
+            printf(">>>>>>\n");
+
+            char *p = buffer;
+
+            while (size)
+            {
+                sent_size = send(client_fd, p, size, 0);
+                if (sent_size == -1)
+                    die_errno(errno);
+
+                p += sent_size;
+                size -= sent_size;
+            }
+        }
+    }
+
     return 0;
 }
 
