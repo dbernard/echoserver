@@ -1,4 +1,5 @@
 #include <errno.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdarg.h>
 #include <stdlib.h>
@@ -22,6 +23,18 @@ die(const char *fmt, ...)
     exit(EXIT_FAILURE);
 }
 
+static void
+sig_chld(int sig)
+{
+    (void) sig;
+
+    int status;
+
+    /* More than one child could have exited, so reap them all. */
+    for (; waitpid(-1, &status, WNOHANG) > 0;)
+        ;
+}
+
 static inline void
 die_errno(int err)
 {
@@ -40,6 +53,14 @@ main(int argc, char *argv[])
 {
     (void) argc;
     (void) argv;
+
+    struct sigaction sa;
+
+    sa.sa_handler = &sig_chld;
+    sa.sa_flags = SA_RESTART;
+    sigemptyset(&sa.sa_mask);
+    if (sigaction(SIGCHLD, &sa, NULL) < 0)
+        die_errno(errno);
 
     int server_fd = socket(PF_INET, SOCK_STREAM /* TCP */, 0);
     if (server_fd < 0)
@@ -73,33 +94,51 @@ main(int argc, char *argv[])
 
         printf("Connection received from: %s\n", client_ip);
 
-        for (;;)
+        pid_t pid;
+        pid = fork();
+
+        if (pid == -1)
         {
-            char buffer[128];
-            size = recv(client_fd, buffer, sizeof(buffer), 0);
+            die_errno(errno);
+        }
 
-            if (size < 0)
-                die_errno(errno);
-
-            // Socket has been closed
-            if (size == 0)
-                break;
-
-            printf("Recv'd %ld bytes:\n<<<<<<\n", size);
-            write(1, buffer, size);
-            printf(">>>>>>\n");
-
-            char *p = buffer;
-
-            while (size)
+        if (pid == 0)
+        {
+            for (;;)
             {
-                sent_size = send(client_fd, p, size, 0);
-                if (sent_size == -1)
+                char buffer[128];
+                size = recv(client_fd, buffer, sizeof(buffer), 0);
+
+                if (size < 0)
                     die_errno(errno);
 
-                p += sent_size;
-                size -= sent_size;
+                // Socket has been closed
+                if (size == 0)
+                    break;
+
+                printf("Recv'd %ld bytes:\n<<<<<<\n", size);
+                write(1, buffer, size);
+                printf(">>>>>>\n");
+
+                char *p = buffer;
+
+                while (size)
+                {
+                    sent_size = send(client_fd, p, size, 0);
+                    if (sent_size == -1)
+                        die_errno(errno);
+
+                    p += sent_size;
+                    size -= sent_size;
+                }
             }
+            close(client_fd);
+            exit(0);
+        }
+        else
+        {
+            // Server (parent) process
+            close(client_fd);
         }
     }
 
