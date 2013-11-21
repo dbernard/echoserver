@@ -8,6 +8,15 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 
+#ifdef ENABLE_THREADING
+#include <pthread.h>
+#endif
+
+#ifdef ENABLE_FORKING
+#ifdef ENABLE_THREADING
+#error "You can't enable both forking and threading."
+#endif
+#endif
 
 static inline void
 die(const char *fmt, ...)
@@ -41,6 +50,94 @@ die_errno(int err)
     fprintf(stderr, "error: %s\n", strerror(err));
     exit(EXIT_FAILURE);
 }
+
+static void
+handle_client(int client_fd)
+{
+    for (;;)
+    {
+        char buffer[128];
+        ssize_t size, sent_size;
+        size = recv(client_fd, buffer, sizeof(buffer), 0);
+
+        if (size < 0)
+            die_errno(errno);
+
+        // Socket has been closed
+        if (size == 0)
+            break;
+
+        printf("Recv'd %ld bytes:\n<<<<<<\n", size);
+        write(1, buffer, size);
+        printf(">>>>>>\n");
+
+        char *p = buffer;
+
+        while (size)
+        {
+            sent_size = send(client_fd, p, size, 0);
+            if (sent_size == -1)
+                die_errno(errno);
+
+            p += sent_size;
+            size -= sent_size;
+        }
+    }
+}
+
+#ifdef ENABLE_FORKING
+static void 
+start_fork(int server_fd, int client_fd)
+{
+    pid_t pid;
+    pid = fork();
+
+    if (pid == -1)
+    {
+        die_errno(errno);
+    }
+
+    if (pid == 0)
+    {
+        close(server_fd);
+        handle_client(client_fd);
+        close(client_fd);
+        exit(0);
+    }
+    else
+    {
+        // Server (parent) process
+        close(client_fd);
+    }
+}
+#endif
+
+#ifdef ENABLE_THREADING
+static void *
+client_thread_routine(void *arg)
+{
+    int *client_fd = arg;
+
+    handle_client(*client_fd);
+
+    return NULL;
+}
+static void
+start_thread(int client_fd)
+{
+    pthread_t client_thread;
+
+    int err = pthread_create(&client_thread, NULL, client_thread_routine,
+                                &client_fd);
+
+    if (err != 0)
+        die_errno(err);
+
+    err = pthread_detach(client_thread);
+    if (err != 0)
+        die_errno(err);
+}
+#endif
 
 /** @brief Main program entry point.
     @param[in] argc  Number of arguments in @c argv.
@@ -88,58 +185,16 @@ main(int argc, char *argv[])
         if (client_fd < 0)
             die_errno(errno);
 
-        ssize_t size, sent_size;
-
         char *client_ip = inet_ntoa(client.sin_addr); //network to addr
 
         printf("Connection received from: %s\n", client_ip);
-
-        pid_t pid;
-        pid = fork();
-
-        if (pid == -1)
-        {
-            die_errno(errno);
-        }
-
-        if (pid == 0)
-        {
-            for (;;)
-            {
-                char buffer[128];
-                size = recv(client_fd, buffer, sizeof(buffer), 0);
-
-                if (size < 0)
-                    die_errno(errno);
-
-                // Socket has been closed
-                if (size == 0)
-                    break;
-
-                printf("Recv'd %ld bytes:\n<<<<<<\n", size);
-                write(1, buffer, size);
-                printf(">>>>>>\n");
-
-                char *p = buffer;
-
-                while (size)
-                {
-                    sent_size = send(client_fd, p, size, 0);
-                    if (sent_size == -1)
-                        die_errno(errno);
-
-                    p += sent_size;
-                    size -= sent_size;
-                }
-            }
-            close(client_fd);
-            exit(0);
-        }
-        else
-        {
-            // Server (parent) process
-            close(client_fd);
-        }
+#ifdef ENABLE_FORKING
+        start_fork(server_fd, client_fd);
+#elif defined(ENABLE_THREADING)
+        start_thread(client_fd);
+#else
+        handle_client(client_fd);
+#endif
     }
 
     return 0;
