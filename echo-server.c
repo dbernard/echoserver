@@ -8,6 +8,10 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 
+#ifdef ENABLE_DAEMON
+#include <fcntl.h>
+#endif
+
 #ifdef ENABLE_THREADING
 #include <pthread.h>
 #endif
@@ -116,9 +120,11 @@ start_fork(int server_fd, int client_fd)
 static void *
 client_thread_routine(void *arg)
 {
-    int *client_fd = arg;
+    int client_fd = *((int )arg);
 
-    handle_client(*client_fd);
+    free(arg);
+
+    handle_client(client_fd);
 
     return NULL;
 }
@@ -127,8 +133,13 @@ start_thread(int client_fd)
 {
     pthread_t client_thread;
 
+    int *p_client_fd = malloc(sizeof(int));
+    if (! p_client_fd)
+        die_errno(errno);
+
+    *p_client_fd = client_fd;
     int err = pthread_create(&client_thread, NULL, client_thread_routine,
-                                &client_fd);
+                                p_client_fd);
 
     if (err != 0)
         die_errno(err);
@@ -136,6 +147,44 @@ start_thread(int client_fd)
     err = pthread_detach(client_thread);
     if (err != 0)
         die_errno(err);
+}
+#endif
+
+#ifdef ENABLE_DAEMON
+static void
+daemonize(void)
+{
+    if (chdir("/"))
+        die_errno(errno);
+
+    close(STDIN_FILENO);
+    close(STDOUT_FILENO);
+    close(STDERR_FILENO);
+
+    if (open("dev/null", O_RDONLY) == -1) {
+        die("failed to reopen stdin (%s)", strerror(errno));
+    }
+
+    if (open("dev/null", O_WRONLY) == -1) {
+        die("failed to reopen stdout (%s)", strerror(errno));
+    }
+
+    if (open("dev/null", O_RDWR) == -1) {
+        die("failed to reopen stderr (%s)", strerror(errno));
+    }
+
+    pid_t pid = fork();
+    if (pid != 0)
+        exit(0);
+
+    if (setsid() == -1)
+        die_errno(errno);
+
+    signal(SIGHUP, SIG_IGN);
+
+    pid = fork();
+    if (pid != 0)
+        exit(0);
 }
 #endif
 
@@ -171,6 +220,10 @@ main(int argc, char *argv[])
 
     if (bind(server_fd, (struct sockaddr *) &server, sizeof(server)))
         die_errno(errno);
+
+#ifdef ENABLE_DAEMON
+    daemonize();
+#endif
 
     if (listen(server_fd, 0))
         die_errno(server_fd);
