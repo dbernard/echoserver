@@ -5,11 +5,14 @@ ifeq ($(ENABLE_THREADING),1)
 	OTHER_FLAGS := $(OTHER_FLAGS) -DENABLE_THREADING
 endif
 ifeq ($(ENABLE_DAEMON),1)
-	OTHER_FLAGS := $(OTHERFlags) -DENABLE_DAEMON
+	OTHER_FLAGS := $(OTHER_FLAGS) -DENABLE_DAEMON
+endif
+ifeq ($(ENABLE_PRIV),1)
+	OTHER_FLAGS := $(OTHER_FLAGS) -DENABLE_PRIV
 endif
 
 echo-server: echo-server.c
-	gcc $(OTHER_FLAGS) -Wall -Wextra -o $@ $^
+	gcc $(OTHER_FLAGS) -g -Wall -Wextra -o $@ $^
 
 .PHONY: clean
 

@@ -12,6 +12,11 @@
 #include <fcntl.h>
 #endif
 
+#ifdef ENABLE_PRIV
+#include <pwd.h>
+#include <inttypes.h>
+#endif
+
 #ifdef ENABLE_THREADING
 #include <pthread.h>
 #endif
@@ -52,6 +57,19 @@ static inline void
 die_errno(int err)
 {
     fprintf(stderr, "error: %s\n", strerror(err));
+    exit(EXIT_FAILURE);
+}
+
+static inline void
+die_errno_msg(int err, const char *fmt, ...)
+{
+    va_list ap;
+
+    va_start(ap, fmt);
+    fprintf(stderr, "error: ");
+    vfprintf(stderr, fmt, ap);
+    fprintf(stderr, " (%s)\n", strerror(err));
+    va_end(ap);
     exit(EXIT_FAILURE);
 }
 
@@ -188,6 +206,28 @@ daemonize(void)
 }
 #endif
 
+#ifdef ENABLE_PRIV
+uid_t
+getuid_by_name(const char *name)
+{
+    uid_t u;
+    char *endptr;
+
+    if (! name || *name == '\0')
+        return -1;
+
+    u = strtol(name, &endptr, 10);
+    if (*endptr == '\0')
+        return u;
+
+    struct passwd *p = getpwnam(name);
+    if (! p)
+        return -1;
+
+    return p->pw_uid;
+}
+#endif
+
 /** @brief Main program entry point.
     @param[in] argc  Number of arguments in @c argv.
     @param[in] argv  Command-line arguments.
@@ -216,11 +256,19 @@ main(int argc, char *argv[])
     struct sockaddr_in server;
     server.sin_family = PF_INET;
     server.sin_addr.s_addr = INADDR_ANY;
-    server.sin_port = htons(8888);
+    server.sin_port = htons(134);
 
     if (bind(server_fd, (struct sockaddr *) &server, sizeof(server)))
-        die_errno(errno);
+        die_errno_msg(errno, "bind failed");
 
+#ifdef ENABLE_PRIV
+    uid_t u = getuid_by_name("nobody");
+    if (u == (uid_t) -1)
+        die("couldn't determine uid for 'nobody'");
+
+    if (setuid(u))
+        die_errno_msg(errno, "couldn't setuid");
+#endif
 #ifdef ENABLE_DAEMON
     daemonize();
 #endif
