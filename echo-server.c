@@ -27,6 +27,11 @@
 #endif
 #endif
 
+#ifdef ENABLE_OPTS
+#include <getopt.h>
+#include <limits.h>
+#endif
+
 static inline void
 die(const char *fmt, ...)
 {
@@ -228,6 +233,52 @@ getuid_by_name(const char *name)
 }
 #endif
 
+#ifdef ENABLE_OPTS
+int
+convert_int(const char *str)
+{
+    char *endptr;
+    long int val;
+
+    /* Reset the value of errno to we detect an error */
+    errno = 0;
+
+    val = strtol(str, &endptr, 10);
+
+    if ((errno == ERANGE && (val == LONG_MAX || val == LONG_MIN))
+        || (errno != 0 && val == 0)
+        || (*endptr != '\0'))
+    {
+        die_errno_msg(errno, "could not convert %s to a number", str);
+    }
+
+    if (val > INT_MAX || val < INT_MIN)
+        die("value %s is out of range", str);
+
+    if (endptr == str)
+        die("no number given");
+
+    return (int) val;
+}
+
+void
+show_help_and_exit(void)
+{
+    printf(
+        "usage: echo-server [options]\n"
+        "\n"
+        "Options:\n"
+        "   -p PORT, --port PORT    The port number to listen on. Defaults to\n"
+        "                           8888.\n"
+        "   -b ADDR, --bind ADDR    The address to listen on. Defaults to\n"
+        "                           0.0.0.0.\n"
+#ifdef ENABLE_DAEMON
+        "   --foreground            Run the server in the foreground.\n"
+#endif
+        "\n");
+    exit(0);
+}
+#endif
 /** @brief Main program entry point.
     @param[in] argc  Number of arguments in @c argv.
     @param[in] argv  Command-line arguments.
@@ -237,8 +288,71 @@ getuid_by_name(const char *name)
 int
 main(int argc, char *argv[])
 {
+    struct sockaddr_in server;
+    server.sin_family = PF_INET;
+    server.sin_addr.s_addr = INADDR_ANY;
+    server.sin_port = htons(8888);
+
+#ifdef ENABLE_OPTS
+    int show_help = 0;
+#ifdef ENABLE_DAEMON
+    int foreground = 0;
+#endif
+
+    struct option long_options[] =
+    {
+        {"help", no_argument, &show_help, 1},
+        {"port", required_argument, NULL, 'p'},
+        {"bind", required_argument, NULL, 'b'},
+#ifdef ENABLE_DAEMON
+        {"foreground", no_argument, &foreground, 1},
+#endif
+        {0, 0, 0, 0},
+    };
+
+    for (;;)
+    {
+        int c;
+        int options_index;
+
+        c = getopt_long(argc, argv, "hb:p:", long_options, &options_index);
+        if (c == -1)
+            break;
+
+        switch (c)
+        {
+        case 0:
+            if (long_options[options_index].flag != NULL)
+                break;
+            die("failed to handle option: %s",
+                long_options[options_index].name);
+            break;
+
+        case 'h':
+            show_help = 1;
+            break;
+
+        case 'b':
+            if (! inet_aton(optarg, &server.sin_addr))
+                die("unable to parse address: %s", optarg);
+            break;
+
+        case 'p':
+            server.sin_port = htons((short) convert_int(optarg));
+            break;
+
+        default:
+            exit(EXIT_FAILURE);
+            break;
+        }
+    }
+
+    if (show_help)
+        show_help_and_exit();
+#else
     (void) argc;
     (void) argv;
+#endif
 
     struct sigaction sa;
 
@@ -253,11 +367,6 @@ main(int argc, char *argv[])
         /* Catch error number for more detailed info */
         die_errno(errno);
 
-    struct sockaddr_in server;
-    server.sin_family = PF_INET;
-    server.sin_addr.s_addr = INADDR_ANY;
-    server.sin_port = htons(134);
-
     if (bind(server_fd, (struct sockaddr *) &server, sizeof(server)))
         die_errno_msg(errno, "bind failed");
 
@@ -270,7 +379,10 @@ main(int argc, char *argv[])
         die_errno_msg(errno, "couldn't setuid");
 #endif
 #ifdef ENABLE_DAEMON
-    daemonize();
+#ifdef ENABLE_OPTS
+    if (! foreground)
+#endif
+        daemonize();
 #endif
 
     if (listen(server_fd, 0))
